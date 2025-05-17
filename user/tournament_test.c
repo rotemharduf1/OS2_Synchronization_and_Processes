@@ -12,7 +12,6 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  // Create a single pipe for print synchronization
   int pipefd[2];
   if (pipe(pipefd) < 0) {
     fprintf(2, "Failed to create pipe\n");
@@ -25,13 +24,11 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  // First, all processes acquire and release the lock
   if (tournament_acquire() < 0) {
     fprintf(2, "Acquire failed\n");
     exit(1);
   }
 
-  // Store our PID for printing later
   int my_pid = getpid();
 
   if (tournament_release() < 0) {
@@ -39,7 +36,6 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  // Then, we synchronize the printing separately
   if (id > 0) {
     char dummy;
     if (read(pipefd[0], &dummy, 1) != 1) {
@@ -48,10 +44,8 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Print process info (now guaranteed to be in order)
   fprintf(1, "Process %d (PID %d) acquired the lock\n", id, my_pid);
 
-  // Signal next process
   if (id < n-1) {
     if (write(pipefd[1], "x", 1) != 1) {
       fprintf(2, "Sync failed\n");
@@ -59,7 +53,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Parent waits for all children
   if (id == 0) {
     int status;
     for (int i = 1; i < n; i++) {

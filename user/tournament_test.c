@@ -1,80 +1,74 @@
 #include "user.h"
 
-// Helper: convert integer to string in buffer
-int printint_to_buf(char *dst, int num) {
-  char tmp[16];
-  int i = 0, len = 0;
-  int neg = 0;
-
-  if (num < 0) {
-    neg = 1;
-    num = -num;
-  }
-
-  do {
-    tmp[i++] = num % 10 + '0';
-    num /= 10;
-  } while (num > 0);
-
-  if (neg) tmp[i++] = '-';
-
-  for (int j = i - 1; j >= 0; j--) {
-    *dst++ = tmp[j];
-    len++;
-  }
-
-  return len;
-}
-
-// Helper: copy string to buffer
-int sprint(char *dst, const char *src) {
-  int len = 0;
-  while (*src) {
-    *dst++ = *src++;
-    len++;
-  }
-  return len;
-}
-
 int main(int argc, char *argv[]) {
   if (argc != 2) {
-    printf("Usage: tournament_test N\n");
+    fprintf(2, "Usage: tournament_test N\n");
     exit(1);
   }
 
   int n = atoi(argv[1]);
+  if (n < 2 || n > 16) {
+    fprintf(2, "N must be between 2 and 16\n");
+    exit(1);
+  }
+
+  // Create a single pipe for print synchronization
+  int pipefd[2];
+  if (pipe(pipefd) < 0) {
+    fprintf(2, "Failed to create pipe\n");
+    exit(1);
+  }
+
   int id = tournament_create(n);
   if (id < 0) {
-    printf("Failed to create tournament\n");
+    fprintf(2, "Failed to create tournament\n");
     exit(1);
   }
 
+  // First, all processes acquire and release the lock
   if (tournament_acquire() < 0) {
-    printf("Acquire failed\n");
+    fprintf(2, "Acquire failed\n");
     exit(1);
   }
 
-  // Critical section: write output atomically while holding lock
-  char buf[100];
-  int len = 0;
-  len += sprint(buf + len, ">>> Process ");
-  len += printint_to_buf(buf + len, id);
-  len += sprint(buf + len, " with PID ");
-  len += printint_to_buf(buf + len, getpid());
-  len += sprint(buf + len, " acquired the lock\n");
+  // Store our PID for printing later
+  int my_pid = getpid();
 
-  for (int i = 0; i < len; i++) {
-    if (write(1, &buf[i], 1) != 1) {
-      // optional error handling
+  if (tournament_release() < 0) {
+    fprintf(2, "Release failed\n");
+    exit(1);
+  }
+
+  // Then, we synchronize the printing separately
+  if (id > 0) {
+    char dummy;
+    if (read(pipefd[0], &dummy, 1) != 1) {
+      fprintf(2, "Sync failed\n");
+      exit(1);
     }
   }
 
-  // Add a tiny delay to reduce contention on the console
-  for (volatile int i = 0; i < 1000000; i++);
+  // Print process info (now guaranteed to be in order)
+  fprintf(1, "Process %d (PID %d) acquired the lock\n", id, my_pid);
 
-  if (tournament_release() < 0) {
-    printf("Release failed\n");
-    exit(1);
+  // Signal next process
+  if (id < n-1) {
+    if (write(pipefd[1], "x", 1) != 1) {
+      fprintf(2, "Sync failed\n");
+      exit(1);
+    }
+  }
+
+  // Parent waits for all children
+  if (id == 0) {
+    int status;
+    for (int i = 1; i < n; i++) {
+      wait(&status);
+      if (status != 0) {
+        fprintf(2, "Child process exited with error\n");
+        exit(1);
+      }
+    }
   }
 
   exit(0);
